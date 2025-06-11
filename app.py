@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 def load_audio(uploaded_file):
     """Load audio file and return audio data and sample rate"""
     try:
-        # Create a temporary file to save the uploaded audio
+        # Using a temporary file is a good practice for large files
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_file_path = tmp_file.name
@@ -94,12 +94,12 @@ def main():
     uploaded_file = st.file_uploader(
         "Choose an audio file",
         type=['wav', 'mp3', 'flac', 'm4a', 'ogg'],
-        help="Supported formats: WAV, MP3, FLAC, M4A, OGG"
+        help="Supported formats: WAV, MP3, FLAC, M4A, OGG. Max size: 1 GB"
     )
     
     if uploaded_file is not None:
         # Display file info
-        st.info(f"📁 Uploaded: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
+        st.info(f"📁 Uploaded: {uploaded_file.name} ({uploaded_file.size / (1024*1024):.1f} MB)")
         
         # Load audio
         with st.spinner("Loading audio file..."):
@@ -130,7 +130,7 @@ def main():
                 with col2:
                     st.subheader("🔇 Noise Reduced Audio")
                     
-                    with st.spinner("Removing noise... This may take a moment."):
+                    with st.spinner("Removing noise... This may take a moment for large files."):
                         cleaned_audio = remove_noise(
                             audio_data, 
                             sample_rate, 
