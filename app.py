@@ -12,18 +12,37 @@ import matplotlib.pyplot as plt
 def load_audio(uploaded_file):
     """Load audio file and return audio data and sample rate"""
     try:
-        # Using a temporary file is a good practice for large files
+        # Create a temporary file to save the uploaded audio
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_file_path = tmp_file.name
         
-        # Load audio using librosa
-        audio_data, sample_rate = librosa.load(tmp_file_path, sr=None)
+        # Load audio using librosa with error handling
+        try:
+            audio_data, sample_rate = librosa.load(tmp_file_path, sr=None)
+            
+            # Ensure audio is mono (convert stereo to mono if needed)
+            if audio_data.ndim > 1:
+                audio_data = np.mean(audio_data, axis=0)
+            
+            # Normalize audio data
+            if np.max(np.abs(audio_data)) > 0:
+                audio_data = audio_data / np.max(np.abs(audio_data))
+            
+        except Exception as e:
+            st.error(f"Error with librosa, trying alternative method: {str(e)}")
+            # Fallback to soundfile
+            audio_data, sample_rate = sf.read(tmp_file_path)
+            if audio_data.ndim > 1:
+                audio_data = np.mean(audio_data, axis=1)
+            if np.max(np.abs(audio_data)) > 0:
+                audio_data = audio_data / np.max(np.abs(audio_data))
         
         # Clean up temporary file
         os.unlink(tmp_file_path)
         
         return audio_data, sample_rate
+        
     except Exception as e:
         st.error(f"Error loading audio file: {str(e)}")
         return None, None
@@ -55,11 +74,22 @@ def create_audio_plot(audio_data, sample_rate, title):
     return fig
 
 def audio_to_bytes(audio_data, sample_rate):
-    """Convert audio data to bytes for download"""
-    buffer = io.BytesIO()
-    sf.write(buffer, audio_data, sample_rate, format='WAV')
-    buffer.seek(0)
-    return buffer.getvalue()
+    """Convert audio data to bytes for download and playback"""
+    try:
+        # Normalize audio to prevent clipping
+        if np.max(np.abs(audio_data)) > 0:
+            audio_data = audio_data / np.max(np.abs(audio_data)) * 0.95
+        
+        # Ensure audio is in the right format (float32)
+        audio_data = audio_data.astype(np.float32)
+        
+        buffer = io.BytesIO()
+        sf.write(buffer, audio_data, sample_rate, format='WAV', subtype='PCM_16')
+        buffer.seek(0)
+        return buffer.getvalue()
+    except Exception as e:
+        st.error(f"Error converting audio: {str(e)}")
+        return None
 
 def main():
     st.set_page_config(
@@ -94,12 +124,12 @@ def main():
     uploaded_file = st.file_uploader(
         "Choose an audio file",
         type=['wav', 'mp3', 'flac', 'm4a', 'ogg'],
-        help="Supported formats: WAV, MP3, FLAC, M4A, OGG. Max size: 1 GB"
+        help="Supported formats: WAV, MP3, FLAC, M4A, OGG"
     )
     
     if uploaded_file is not None:
         # Display file info
-        st.info(f"📁 Uploaded: {uploaded_file.name} ({uploaded_file.size / (1024*1024):.1f} MB)")
+        st.info(f"📁 Uploaded: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
         
         # Load audio
         with st.spinner("Loading audio file..."):
@@ -117,8 +147,14 @@ def main():
                 st.subheader("🔊 Original Audio")
                 
                 # Play original audio
-                original_bytes = audio_to_bytes(audio_data, sample_rate)
-                st.audio(original_bytes, format='audio/wav')
+                try:
+                    original_bytes = audio_to_bytes(audio_data, sample_rate)
+                    if original_bytes:
+                        st.audio(original_bytes, format='audio/wav')
+                    else:
+                        st.error("Could not generate audio for playback")
+                except Exception as e:
+                    st.error(f"Error playing original audio: {str(e)}")
                 
                 # Plot original waveform
                 fig_original = create_audio_plot(audio_data, sample_rate, "Original Audio Waveform")
@@ -130,7 +166,7 @@ def main():
                 with col2:
                     st.subheader("🔇 Noise Reduced Audio")
                     
-                    with st.spinner("Removing noise... This may take a moment for large files."):
+                    with st.spinner("Removing noise... This may take a moment."):
                         cleaned_audio = remove_noise(
                             audio_data, 
                             sample_rate, 
@@ -139,22 +175,45 @@ def main():
                         )
                     
                     if cleaned_audio is not None:
+                        st.success("✅ Noise removal completed!")
+                        
                         # Play cleaned audio
-                        cleaned_bytes = audio_to_bytes(cleaned_audio, sample_rate)
-                        st.audio(cleaned_bytes, format='audio/wav')
+                        try:
+                            cleaned_bytes = audio_to_bytes(cleaned_audio, sample_rate)
+                            if cleaned_bytes:
+                                st.audio(cleaned_bytes, format='audio/wav')
+                                
+                                # Download button
+                                st.download_button(
+                                    label="📥 Download Cleaned Audio",
+                                    data=cleaned_bytes,
+                                    file_name=f"cleaned_{uploaded_file.name.split('.')[0]}.wav",
+                                    mime="audio/wav"
+                                )
+                            else:
+                                st.error("Could not generate cleaned audio for playback")
+                        except Exception as e:
+                            st.error(f"Error playing cleaned audio: {str(e)}")
+                            # Still try to provide download even if playback fails
+                            try:
+                                cleaned_bytes = audio_to_bytes(cleaned_audio, sample_rate)
+                                if cleaned_bytes:
+                                    st.download_button(
+                                        label="📥 Download Cleaned Audio (Playback Error)",
+                                        data=cleaned_bytes,
+                                        file_name=f"cleaned_{uploaded_file.name.split('.')[0]}.wav",
+                                        mime="audio/wav"
+                                    )
+                            except:
+                                st.error("Could not generate audio file")
                         
                         # Plot cleaned waveform
-                        fig_cleaned = create_audio_plot(cleaned_audio, sample_rate, "Noise Reduced Audio Waveform")
-                        st.pyplot(fig_cleaned)
-                        plt.close()
-                        
-                        # Download button
-                        st.download_button(
-                            label="📥 Download Cleaned Audio",
-                            data=cleaned_bytes,
-                            file_name=f"cleaned_{uploaded_file.name.split('.')[0]}.wav",
-                            mime="audio/wav"
-                        )
+                        try:
+                            fig_cleaned = create_audio_plot(cleaned_audio, sample_rate, "Noise Reduced Audio Waveform")
+                            st.pyplot(fig_cleaned)
+                            plt.close()
+                        except Exception as e:
+                            st.error(f"Error plotting cleaned audio: {str(e)}")
                         
                         # Audio statistics
                         st.subheader("📊 Audio Statistics")
@@ -167,6 +226,8 @@ def main():
                         with stats_col2:
                             st.metric("Cleaned RMS", f"{np.sqrt(np.mean(cleaned_audio**2)):.4f}")
                             st.metric("Cleaned Peak", f"{np.max(np.abs(cleaned_audio)):.4f}")
+                    else:
+                        st.error("Failed to process audio. Please try with different settings.")
     
     # Instructions
     st.markdown("---")
